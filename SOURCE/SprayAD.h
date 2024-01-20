@@ -17,8 +17,8 @@ DECLSPEC_IMPORT HLOCAL WINAPI KERNEL32$LocalFree(HLOCAL hMem);
 WINBASEAPI LPVOID WINAPI KERNEL32$HeapAlloc(HANDLE hHeap, DWORD dwFlags, SIZE_T dwBytes);
 WINBASEAPI HANDLE WINAPI KERNEL32$GetProcessHeap();
 WINBASEAPI BOOL WINAPI KERNEL32$HeapFree(HANDLE, DWORD, PVOID);
-WINBASEAPI WINBOOL WINAPI KERNEL32$QueryPerformanceFrequency(LARGE_INTEGER *lpFrequency);
-WINBASEAPI WINBOOL WINAPI KERNEL32$QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount);
+WINBASEAPI BOOL WINAPI KERNEL32$QueryPerformanceFrequency(LARGE_INTEGER *lpFrequency);
+WINBASEAPI BOOL WINAPI KERNEL32$QueryPerformanceCounter(LARGE_INTEGER *lpPerformanceCount);
 WINBASEAPI int WINAPI KERNEL32$lstrlenW(LPCWSTR lpString);
 
 //MSVCRT
@@ -105,3 +105,11 @@ typedef HRESULT (WINAPI *_ADsOpenObject)(
 typedef BOOL (WINAPI *_FreeADsMem)(
 	LPVOID pMem
 	);
+
+HRESULT BeaconPrintToStreamW(LPCWSTR lpwFormat, ...);
+
+BOOL IsDomainUser();
+BOOL GetCpuName(CString& strDeviceName);
+BOOL GetCurUserName(CString& strUserName);
+
+BOOL getUserName(CString& strDomainName);
