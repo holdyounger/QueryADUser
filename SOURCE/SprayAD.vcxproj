@@ -80,6 +80,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>false</SDLCheck>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -125,6 +126,7 @@
   <ItemGroup>
     <ClCompile Include="ApiResolve.cpp" />
     <ClCompile Include="beacon_compatibility.cpp" />
+    <ClCompile Include="cJSON.cpp" />
     <ClCompile Include="ministdlib.cpp" />
     <ClCompile Include="SprayAD.cpp" />
     <ClCompile Include="SprayADUtils.cpp" />
@@ -133,7 +135,9 @@
     <ClInclude Include="APIResolve.h" />
     <ClInclude Include="beacon.h" />
     <ClInclude Include="beacon_compatibility.h" />
+    <ClInclude Include="cJSON.h" />
     <ClInclude Include="ministdlib.h" />
+    <ClInclude Include="obfuscation.h" />
     <ClInclude Include="SprayAD.h" />
     <ClInclude Include="SprayADUtils.h" />
   </ItemGroup>

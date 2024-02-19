@@ -100,8 +100,23 @@ getDllBase(unsigned long dll_hash) {
 	PPEB_LDR_DATA ptr_ldr_data = NULL;
 	PLDR_DATA_TABLE_ENTRY ptr_module_entry = NULL, ptr_start_module = NULL;
 	PUNICODE_STR dll_name = NULL;
-
+#ifdef _WIN64
 	ptr_peb = (_PEB*)__readgsqword(0x60);
+#else
+	ptr_peb = (_PEB*)__readfsdword(0x30);
+/*
+//alternative way to fetch it:
+	LPVOID PEB = NULL;
+	__asm {
+		mov eax, fs:[30h]
+		mov PEB, eax
+	};
+	return (PPEB)PEB;
+
+	or:
+	LPVOID PEB = RtlGetCurrentPeb();
+*/
+#endif
 	ptr_ldr_data = ptr_peb->pLdr;
 	ptr_module_entry = ptr_start_module = (PLDR_DATA_TABLE_ENTRY)ptr_ldr_data->InMemoryOrderModuleList.Flink;
 
